@@ -218,9 +218,30 @@ else()
         else()
             message(FATAL_ERROR "Unknown android abi type")
         endif()
-        set(OPENSSL_CONFIG_CMD ${CMAKE_CURRENT_SOURCE_DIR}/${QUIC_OPENSSL}/Configure
-            ${OPENSSL_BUILD_TYPE}
-            -D__ANDROID_API__=29)
+        # On a Windows host, Configure is a Perl script and cannot be executed
+        # directly (no shebang support); invoke perl explicitly.
+        if(CMAKE_HOST_WIN32)
+            # Prefer Strawberry Perl (full CPAN modules needed by OpenSSL)
+            find_program(PERL_EXECUTABLE perl
+                HINTS "C:/Strawberry/perl/bin"
+                REQUIRED)
+            set(OPENSSL_CONFIG_CMD ${PERL_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/${QUIC_OPENSSL}/Configure
+                ${OPENSSL_BUILD_TYPE}
+                -D__ANDROID_API__=29)
+            # Convert the Windows perl path (C:/...) to MSYS-style (/c/...)
+            # so sh.exe (used by GNU make) can execute Perl without misinterpreting
+            # backslashes as escape sequences.
+            string(REGEX REPLACE "^([A-Za-z]):" "/\\1" PERL_MSYS "${PERL_EXECUTABLE}")
+            string(TOLOWER "${PERL_MSYS}" PERL_MSYS)
+        else()
+            set(OPENSSL_CONFIG_CMD ${CMAKE_CURRENT_SOURCE_DIR}/${QUIC_OPENSSL}/Configure
+                ${OPENSSL_BUILD_TYPE}
+                -D__ANDROID_API__=29)
+        endif()
+        # no-asm: skip assembly generators (which use Unix-only CC=value cmd syntax)
+        # so the OpenSSL Makefile is compatible with cmd.exe on a Windows host.
+        list(APPEND OPENSSL_CONFIG_FLAGS no-asm)
     elseif (CX_PLATFORM STREQUAL "linux")
         if(CMAKE_SYSTEM_PROCESSOR STREQUAL arm)
             set(OPENSSL_CONFIG_CMD ${CMAKE_CURRENT_SOURCE_DIR}/${QUIC_OPENSSL}/Configure
@@ -298,25 +319,68 @@ else()
     file(MAKE_DIRECTORY ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL})
 
     # Configure steps for debug and release variants
+    # Use cmake -E env to set SYSTEM portably (avoids Unix-only VAR=value cmd syntax
+    # which fails when the host shell is cmd.exe on Windows).
+    # Also pass ANDROID_NDK_ROOT which OpenSSL's Configure requires for android targets.
+    if(ANDROID)
+        # Convert backslashes to forward slashes — OpenSSL's Perl Configure uses
+        # ANDROID_NDK_ROOT in regex patterns, so Windows backslashes break parsing.
+        string(REPLACE "\\" "/" ANDROID_NDK_FWDSLASH "${ANDROID_NDK}")
+        # CONFIGURE_CHECKER_WARN=1 demotes the unix-checker.pm fatal error (which
+        # rejects MSWin32 Perl) to a warning so cross-compilation can proceed.
+        set(OPENSSL_ENV_ARGS "SYSTEM=${CMAKE_HOST_SYSTEM_NAME}" "ANDROID_NDK_ROOT=${ANDROID_NDK_FWDSLASH}" "CONFIGURE_CHECKER_WARN=1")
+    else()
+        set(OPENSSL_ENV_ARGS "SYSTEM=${CMAKE_HOST_SYSTEM_NAME}")
+    endif()
+    # On Windows with Android target: after Configure, patch the generated Makefile
+    # to replace backslash path separators with forward slashes so that sh.exe
+    # (GNU make's POSIX shell, required for the for/do loop recipes) does not
+    # mangle unquoted Windows paths.  Also set SHELL=sh.exe so make uses sh.exe.
+    if(ANDROID AND CMAKE_HOST_WIN32)
+        set(MAKE_EXTRA_ARGS "SHELL=C:/GitSh/sh.exe")
+        set(OPENSSL_MAKEFILE_PATCHED ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}/Makefile.win_patched)
+    else()
+        set(MAKE_EXTRA_ARGS)
+    endif()
     add_custom_command(
         WORKING_DIRECTORY ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}
         OUTPUT ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}/Makefile
-        COMMAND SYSTEM=${CMAKE_HOST_SYSTEM_NAME}
+        COMMAND ${CMAKE_COMMAND} -E env ${OPENSSL_ENV_ARGS}
             ${OPENSSL_CONFIG_CMD} ${OPENSSL_CONFIG_FLAGS}
         COMMENT "OpenSSL configure"
     )
+
+    if(ANDROID AND CMAKE_HOST_WIN32)
+        # Patch the generated Makefile: replace every backslash path separator
+        # with a forward slash using a cmake -P script (avoids shell quoting issues).
+        add_custom_command(
+            WORKING_DIRECTORY ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}
+            OUTPUT ${OPENSSL_MAKEFILE_PATCHED}
+            DEPENDS ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}/Makefile
+            COMMAND ${CMAKE_COMMAND}
+                -DMAKEFILE_PATH=${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}/Makefile
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/fix_openssl_makefile.cmake
+            COMMAND ${CMAKE_COMMAND} -E touch ${OPENSSL_MAKEFILE_PATCHED}
+            COMMENT "Patch OpenSSL Makefile backslash paths for sh.exe compatibility"
+        )
+    endif()
 
     include(ProcessorCount)
     ProcessorCount(NPROCS)
 
     message(STATUS "Configuring OpenSSL: ${OPENSSL_CONFIG_CMD} ${OPENSSL_CONFIG_FLAGS}")
     # Compile/install commands for debug and release variants
+    if(ANDROID AND CMAKE_HOST_WIN32)
+        set(OPENSSL_MAKE_DEPENDS ${OPENSSL_MAKEFILE_PATCHED})
+    else()
+        set(OPENSSL_MAKE_DEPENDS ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}/Makefile)
+    endif()
     add_custom_command(
         OUTPUT ${LIBSSL_PATH}
         OUTPUT ${LIBCRYPTO_PATH}
-        DEPENDS ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}/Makefile
+        DEPENDS ${OPENSSL_MAKE_DEPENDS}
         WORKING_DIRECTORY ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}
-        COMMAND make install_dev -j${NPROCS}
+        COMMAND ${CMAKE_COMMAND} -E env "SYSTEM=${CMAKE_HOST_SYSTEM_NAME}" make ${MAKE_EXTRA_ARGS} install_dev -j${NPROCS}
         COMMENT "OpenSSL build"
     )
 
