@@ -82,6 +82,18 @@ pass-through. Future work: make junction creation conditional on spaces being pr
 3. SDK Manager directories: `%LOCALAPPDATA%\Android\Sdk\ndk\*`,
    `C:\Android\Sdk\ndk\*`, `C:\android-sdk\ndk\*`
 
+### Target architectures
+
+Only two ABIs are built and shipped:
+
+| Script `-Arch` | Android ABI | Notes |
+|----------------|-------------|-------|
+| `x64`          | `x86_64`    | Android emulator and x86-64 devices |
+| `arm64`        | `arm64-v8a` | All modern Android phones/tablets |
+
+32-bit ABIs (`x86`, `armeabi-v7a`) are intentionally excluded — VpnHood targets
+API 29+ devices where 64-bit is universal.
+
 ### Outputs
 
 ```
