@@ -5,9 +5,7 @@
 //
 #pragma warning restore IDE0073
 
-using System;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 #if NETSTANDARD

@@ -106,6 +106,32 @@ Both directories are git-ignored and regenerated on every run.
 
 ---
 
+## Consuming this from .NET (VpnHood QUIC on Android)
+
+`VpnHood.Core.Quic.Android` drives MsQuic on Android via **P/Invoke over the C# bindings in
+`src/cs/lib`** — it does **NOT** use `System.Net.Quic`. So a .NET consumer needs exactly two things
+from this repo:
+
+1. **`libmsquic.so`** (per ABI) — bundled into the APK. msquic statically links its own OpenSSL, so
+   no `libcrypto`/`libssl` or .NET OpenSSL crypto shim is required.
+2. **`src/cs/lib/msquic*.cs`** — the generated C# P/Invoke bindings, compiled into the consumer
+   assembly. TLS certificate validation is done in managed code by the consumer using the **Android**
+   crypto backend (`X509Certificate2` / `X509Chain`).
+
+> **Do NOT** try to reuse `System.Net.Quic` on Android. It loads (`QuicConnection.IsSupported`
+> becomes true with a bundled `libmsquic.so`) but **crashes in cert validation** (`X509_up_ref` on an
+> Android cert handle passed to OpenSSL): its validation is hard-wired to the OpenSSL crypto backend,
+> which clashes with Android's. Shipping `libcrypto`/`libssl`/the OpenSSL shim does not fix it. This
+> was tried and abandoned — see `VpnHood/Src/Core/VpnHood.Core.Quic.Android/README.md` for the full
+> rationale and the working client design (`AndroidQuicClient`/`Connection`/`Stream`,
+> `DEFER_CERTIFICATE_VALIDATION`, SNI handling).
+
+> Incremental-build note (consumer side): changing `libmsquic.so` is often **not** picked up by an
+> incremental app build — rebuild the **app** project (`dotnet build -t:Rebuild`, or Clean+Rebuild in
+> the IDE) and redeploy, otherwise the APK keeps the previously-gathered native libs.
+
+---
+
 ## Key patches and why they exist
 
 ### `submodules/openssl/Configurations/15-android.conf`

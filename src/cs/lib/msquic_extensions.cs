@@ -5,8 +5,6 @@
 //
 #pragma warning restore IDE0073
 
-using System;
-
 namespace Microsoft.Quic
 {
     internal static unsafe class MsQuicExtensions

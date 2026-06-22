@@ -5,7 +5,6 @@
 //
 #pragma warning restore IDE0073
 
-using System;
 using System.Net.Sockets;
 
 namespace Microsoft.Quic
