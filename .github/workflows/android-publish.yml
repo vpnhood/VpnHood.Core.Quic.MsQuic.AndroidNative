@@ -63,6 +63,31 @@ jobs:
           set -euo pipefail
           export ANDROID_NDK_ROOT="$NDK"
           export ANDROID_NDK_HOME="$NDK"
+
+          # OpenSSL's Configure (15-android.conf) looks for the legacy GCC-triple
+          # compilers (aarch64-linux-android-gcc) but modern NDK ships only
+          # API-suffixed clang (aarch64-linux-android29-clang) + llvm-* tools.
+          # Generate thin wrapper scripts that forward to the real binaries and
+          # put them (plus the NDK llvm bin) on PATH. Mirrors android/build-android.ps1.
+          NDK_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          if [ ! -d "$NDK_BIN" ]; then
+            echo "::error::NDK llvm bin not found at $NDK_BIN"; ls "$NDK/toolchains/llvm/prebuilt" || true; exit 1
+          fi
+          WRAP="$PWD/android-gcc-wrappers"
+          mkdir -p "$WRAP"
+          write_wrap() { printf '#!/bin/sh\nexec "%s" "$@"\n' "$2" > "$1"; chmod +x "$1"; }
+          make_wrappers() {
+            local t="$1"
+            write_wrap "$WRAP/${t}-gcc"    "$NDK_BIN/${t}${ANDROID_API_LEVEL}-clang"
+            write_wrap "$WRAP/${t}-g++"    "$NDK_BIN/${t}${ANDROID_API_LEVEL}-clang++"
+            write_wrap "$WRAP/${t}-ar"     "$NDK_BIN/llvm-ar"
+            write_wrap "$WRAP/${t}-ranlib" "$NDK_BIN/llvm-ranlib"
+            write_wrap "$WRAP/${t}-strip"  "$NDK_BIN/llvm-strip"
+          }
+          make_wrappers aarch64-linux-android
+          make_wrappers x86_64-linux-android
+          export PATH="$WRAP:$NDK_BIN:$PATH"
+
           build_abi() {
             local ABI="$1"
             echo "=== Configuring $ABI ==="
