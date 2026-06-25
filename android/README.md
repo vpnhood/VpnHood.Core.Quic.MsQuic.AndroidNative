@@ -1,51 +1,48 @@
 # VpnHood — msquic for Android (native)
 
-This is a **fork of [microsoft/msquic](https://github.com/microsoft/msquic)** kept by VpnHood
-to cross-compile msquic for Android (x86_64 and arm64-v8a) on Windows, using OpenSSL as the
-TLS backend.
+A **fork of [microsoft/msquic](https://github.com/microsoft/msquic)** that cross-compiles msquic for
+Android (`arm64-v8a`, `x86_64`) with OpenSSL as the TLS backend, and publishes it as the NuGet package
+**`VpnHood.Core.Quic.MsQuic.AndroidNative`** (the native `libmsquic.so` + the `Microsoft.Quic` C# bindings).
 
-Everything VpnHood-specific lives under this `android/` directory so that merges from the
-upstream msquic repository stay conflict-free. The only changes outside this folder are the
-minimal source patches required for the Android/OpenSSL-on-Windows build (e.g. `CMakeLists.txt`
-and `submodules/fix_openssl_makefile.cmake`).
+All VpnHood-specific code lives under this `android/` directory so merges from upstream msquic stay
+conflict-free. The only changes outside it are the few source patches the Android/OpenSSL build needs
+(`CMakeLists.txt`, `submodules/CMakeLists.txt`, `submodules/patches/`).
 
-## Building
+## How it's built & published — the normal path
 
-Requirements: Windows + PowerShell 7.2+, CMake ≥ 3.21, Ninja, the Android NDK, and
-Strawberry Perl (for OpenSSL's `Configure`).
+**GitHub Actions builds and publishes on every push to `main`. No local toolchain is required.**
+[`.github/workflows/android-publish.yml`](../.github/workflows/android-publish.yml) cross-compiles both
+ABIs on `ubuntu-latest`, packs the NuGet, and pushes it to nuget.org as **`8.0.<run-number>`**
+(auto-incrementing). Consumers float on `8.0.*` (or pin a version) and restore the newest build.
+
+- The native `.so` is **not committed** — it is built fresh by CI and packed into the package
+  (`native/**/*.so` is git-ignored).
+- `NUGET_API_KEY` is an **organization secret** on the `vpnhood` GitHub org.
+
+**To ship a new native build: push to `main`.** That's the whole release process.
+
+## Building locally (optional)
+
+Only needed to iterate on the native `.so` without a CI round-trip — for example testing an msquic/OpenSSL
+change before pushing. See **[DEV-GUIDE.md](DEV-GUIDE.md)** for prerequisites (Windows, NDK, Strawberry
+Perl, …) and how the build works under the hood.
 
 ```powershell
-# from the repo root
-./android/build-android.ps1                       # Release, both arches
-./android/build-android.ps1 -Config Debug -Arch arm64
-./android/build-android.ps1 -NdkPath "C:\Android\Sdk\ndk\27.2.12479018"
+./android/build-android.ps1          # Release, both arches -> android/artifacts/ (git-ignored)
 ```
 
-Outputs (all git-ignored, regenerated each run):
-- `android/artifacts/android/<arch>_<config>_openssl/` — the built `libmsquic.so`
-- `android/android-gcc-wrappers/` — generated NDK toolchain shims
-- `build/android/<arch>_openssl/` — CMake/Ninja build tree
+## Related docs
 
-## Updating from upstream msquic
+| Doc | Purpose |
+|-----|---------|
+| [AndroidNative/README.md](AndroidNative/README.md) | What the package ships and how `VpnHood.Core.Quic.Android` consumes it |
+| [DEV-GUIDE.md](DEV-GUIDE.md) | Local Windows build, the key source patches, and upstream-merge steps |
 
-`origin` is this VpnHood fork; `upstream` is microsoft/msquic.
-
-```bash
-git fetch upstream
-git merge upstream/main          # or pin to a release tag, e.g. upstream/v2.6.0
-git submodule update --init --recursive
-```
-
-Conflicts can only occur on the few upstream files we patched (e.g. `CMakeLists.txt`);
-the `android/` tooling is never touched by upstream. Resolve, rebuild, and push.
-
-## Fresh clone
+## Fresh clone & remotes
 
 ```bash
 git clone --recurse-submodules https://github.com/vpnhood/VpnHood.Core.Quic.MsQuic.AndroidNative.git
 ```
-
-## Remotes
 
 | name       | url                                                      |
 |------------|----------------------------------------------------------|

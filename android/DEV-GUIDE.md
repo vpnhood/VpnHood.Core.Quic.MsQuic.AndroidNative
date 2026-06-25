@@ -3,6 +3,13 @@
 Everything in this directory is VpnHood-specific and intentionally isolated so
 upstream msquic merges stay conflict-free.
 
+> **The primary build/publish path is CI, not this guide.** GitHub Actions builds both ABIs on Linux
+> and publishes the NuGet on every push to `main` (see
+> [`.github/workflows/android-publish.yml`](../.github/workflows/android-publish.yml) and
+> [README.md](README.md)). This guide covers the **local Windows build**, needed only to iterate on the
+> native `libmsquic.so` before pushing. Note the Linux/CI build needs **none** of the Windows
+> workarounds below — they exist purely because cross-compiling on a Windows host is awkward.
+
 ---
 
 ## Repository layout (VpnHood additions only)
@@ -15,18 +22,18 @@ android/
   DEV-GUIDE.md               # this file
 
 submodules/
-  CMakeLists.txt             # patched: wires OpenSSL into the msquic CMake build
-  fix_openssl_makefile.cmake # post-generate hook: replaces \ with / in the
-                             # OpenSSL Makefile so GNU make on Windows works
-
-submodules/openssl/
-  Configurations/15-android.conf  # patched (staged in submodule): normalises
-                                  # NDK path to forward slashes inside OpenSSL's
-                                  # Perl Configure so regex matching works on Windows
+  CMakeLists.txt                      # patched: wires OpenSSL into the msquic CMake build
+  fix_openssl_makefile.cmake          # post-generate hook: replaces \ with / in the
+                                      # OpenSSL Makefile so GNU make on Windows works
+  apply_openssl_patches.cmake         # idempotent step: applies the patch below before Configure
+  patches/
+    openssl-15-android-windows.patch  # Windows-host fix to OpenSSL's Configurations/15-android.conf;
+                                      # applied to the (otherwise stock) openssl submodule at build time
 ```
 
-All other files are from upstream microsoft/msquic and should be left unmodified
-unless a new upstream patch is needed.
+The `openssl` submodule itself is left **stock** — the Windows fix is applied as a build-time patch, not
+committed into the submodule. All other files are from upstream microsoft/msquic and should be left
+unmodified unless a new upstream patch is needed.
 
 ---
 
@@ -134,7 +141,7 @@ from this repo:
 
 ## Key patches and why they exist
 
-### `submodules/openssl/Configurations/15-android.conf`
+### OpenSSL Configure on Windows — `submodules/patches/openssl-15-android-windows.patch`
 
 **Problem:** OpenSSL's Perl `Configure` passes the NDK path to `which()` and then
 matches the result against `$ndk` using a regex. On Windows, `which()` may return
@@ -148,16 +155,10 @@ never matches, so Configure reports "no NDK clang on $PATH" and aborts.
 The NDK path stored in `$ndk` is also normalised to forward slashes early in
 Configure via `$ndk =~ s|\\|/|g`.
 
-This change is a **staged commit inside the openssl submodule**. To check its
-status:
-```bash
-cd submodules/openssl && git status
-```
-To inspect the diff:
-```bash
-cd submodules/openssl && git diff --cached Configurations/15-android.conf
-```
-**Do not run `git submodule update --force`** — that would discard this patch.
+This fix lives as a **build-time patch** — `submodules/patches/openssl-15-android-windows.patch` —
+applied to the otherwise-stock `openssl` submodule by `submodules/apply_openssl_patches.cmake` just before
+Configure runs (Windows host only; the Linux/CI build doesn't need it). The apply step is idempotent.
+Because the submodule itself stays stock, `git submodule update` is **safe** and won't discard the fix.
 
 ### `submodules/fix_openssl_makefile.cmake`
 
@@ -189,7 +190,7 @@ regenerated every run and are git-ignored.
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `CMakeCache.txt … different … source directory` | Stale build tree from a different repo location | Run with `-Clean` |
-| `no NDK clang on $PATH` | `15-android.conf` patch missing or NDK path mismatch | Verify patch is staged: `cd submodules/openssl && git status` |
+| `no NDK clang on $PATH` | OpenSSL Windows patch not applied or NDK path mismatch | Confirm `submodules/patches/openssl-15-android-windows.patch` still applies cleanly and the NDK path is correct |
 | `cmake not found` / old cmake picked up | Strawberry Perl puts an old cmake in `C:\Strawberry\c\bin` | Ensure `C:\Program Files\CMake\bin` comes first in PATH (script does this automatically) |
 | OpenSSL Makefile build fails with path errors | `fix_openssl_makefile.cmake` not applied | Check `submodules/CMakeLists.txt` still calls it post-configure |
 | NDK not found | No env var set, NDK under `Program Files` path not in search list | Pass `-NdkPath` explicitly or set `ANDROID_NDK_HOME` |
@@ -207,7 +208,7 @@ git submodule update --init --recursive
 Conflicts can only occur on the files listed in the "Key patches" section above
 (`CMakeLists.txt`, `submodules/CMakeLists.txt`, `submodules/fix_openssl_makefile.cmake`).
 The `android/` directory is never touched by upstream. After resolving any conflicts,
-verify the openssl submodule patch is still intact, then rebuild with `-Clean`.
+verify the patch files under `submodules/patches/` still apply, then rebuild with `-Clean`.
 
 ---
 
@@ -221,5 +222,6 @@ cd ../..
 git add submodules/openssl
 ```
 
-After bumping, re-apply (or verify) the `15-android.conf` patch, run with `-Clean`,
-and confirm the build succeeds before committing.
+After bumping, run with `-Clean` and confirm the build succeeds. The `15-android.conf` fix is re-applied
+automatically at build time; if the upstream file changed enough that the patch no longer applies, update
+`submodules/patches/openssl-15-android-windows.patch`.
