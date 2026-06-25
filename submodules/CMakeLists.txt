@@ -342,9 +342,31 @@ else()
     else()
         set(MAKE_EXTRA_ARGS)
     endif()
+    # The upstream OpenSSL submodule cannot carry our Windows-host build fixes (a
+    # submodule records only a commit pointer, not file edits, and we don't own the
+    # repo). Those fixes live as patches under submodules/patches/ and are applied to
+    # the submodule source *before* Configure runs, since Configure reads the patched
+    # Configurations/15-android.conf. The apply step is idempotent (see
+    # apply_openssl_patches.cmake).
+    if(ANDROID AND CMAKE_HOST_WIN32)
+        set(OPENSSL_PATCH_STAMP ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}/openssl_patches.applied)
+        add_custom_command(
+            OUTPUT ${OPENSSL_PATCH_STAMP}
+            COMMAND ${CMAKE_COMMAND}
+                -DOPENSSL_SRC=${CMAKE_CURRENT_SOURCE_DIR}/${QUIC_OPENSSL}
+                -DPATCH_FILE=${CMAKE_CURRENT_SOURCE_DIR}/patches/openssl-15-android-windows.patch
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/apply_openssl_patches.cmake
+            COMMAND ${CMAKE_COMMAND} -E touch ${OPENSSL_PATCH_STAMP}
+            COMMENT "Apply OpenSSL Windows-host patches"
+        )
+        set(OPENSSL_CONFIGURE_DEPENDS ${OPENSSL_PATCH_STAMP})
+    else()
+        set(OPENSSL_CONFIGURE_DEPENDS)
+    endif()
     add_custom_command(
         WORKING_DIRECTORY ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}
         OUTPUT ${QUIC_BUILD_DIR}/submodules/${QUIC_OPENSSL}/Makefile
+        DEPENDS ${OPENSSL_CONFIGURE_DEPENDS}
         COMMAND ${CMAKE_COMMAND} -E env ${OPENSSL_ENV_ARGS}
             ${OPENSSL_CONFIG_CMD} ${OPENSSL_CONFIG_FLAGS}
         COMMENT "OpenSSL configure"

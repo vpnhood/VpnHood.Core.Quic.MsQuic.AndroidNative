@@ -1,0 +1,85 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<!-- ================================================================================================
+	     Self-contained native QUIC package for Android: the prebuilt libmsquic.so (committed, per ABI)
+	     PLUS the Microsoft.Quic C# P/Invoke bindings. It has NO VpnHood dependencies and is the ONLY
+	     place that knows about native linking. VpnHood.Core.Quic.Android references just this project
+	     (or, once published, the NuGet of the same name) and stays a clean, pure-managed project.
+	     ================================================================================================ -->
+	<PropertyGroup>
+		<Description>Prebuilt MsQuic (libmsquic.so) for Android plus the Microsoft.Quic P/Invoke bindings. Self-contained: ships the native library per ABI and exposes the bindings. No VpnHood dependencies.</Description>
+		<TargetFramework>net10.0-android36.1</TargetFramework>
+		<SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
+		<AssemblyName>VpnHood.Core.Quic.MsQuic.AndroidNative</AssemblyName>
+		<RootNamespace>VpnHood.Core.Quic.MsQuic.AndroidNative</RootNamespace>
+		<!-- Published package name (used by `dotnet pack`). -->
+		<PackageId>VpnHood.Core.Quic.MsQuic.AndroidNative</PackageId>
+	</PropertyGroup>
+
+	<PropertyGroup>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<IncludeSymbols>True</IncludeSymbols>
+		<SymbolPackageFormat>symbols.nupkg</SymbolPackageFormat>
+		<LangVersion>latest</LangVersion>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<!-- This repo (the msquic fork) uses Central Package Management; this project pins nothing of its
+		     own, so opt out to avoid CPM constraints leaking in. -->
+		<ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+		<!-- Suppress warnings coming from the generated msquic C# bindings (compiled in below). -->
+		<NoWarn>$(NoWarn);CS8632;CS0169;CS0649;CS0414;IDE0073;SYSLIB0057</NoWarn>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)'=='Release'">
+		<PathMap>$(MSBuildThisFileDirectory)=.</PathMap>
+	</PropertyGroup>
+
+	<PropertyGroup>
+		<PackageLicenseExpression>LGPL-2.1-only</PackageLicenseExpression>
+		<Company>OmegaHood LLC</Company>
+		<Copyright>© OmegaHood LLC. All rights reserved.</Copyright>
+		<PackageProjectUrl>https://github.com/vpnhood/vpnhood</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/vpnhood/vpnhood</RepositoryUrl>
+		<Version>8.0.821</Version>
+		<FileVersion>$([System.DateTime]::Now.ToString("yyyy.M.d.HHmm"))</FileVersion>
+	</PropertyGroup>
+
+	<!-- Locations of the native artifacts produced by this repo (see android/DEV-GUIDE.md). -->
+	<PropertyGroup>
+		<MsQuicArtifactsDir>$(MSBuildThisFileDirectory)..\artifacts\android</MsQuicArtifactsDir>
+		<MsQuicNativeDir>$(MSBuildThisFileDirectory)native</MsQuicNativeDir>
+	</PropertyGroup>
+
+	<!-- The Microsoft.Quic C# P/Invoke bindings live in Bindings\ as a committed, self-contained copy with
+	     PUBLIC types (so consumers need no InternalsVisibleTo). They are picked up by the SDK's default .cs
+	     globbing — no explicit <Compile> items needed. -->
+
+	<!-- The prebuilt native libraries are COMMITTED under native\<abi>\ (the package carries the binary).
+	     They flow transitively into any consuming APK. Only arm64-v8a + x86_64 are produced. -->
+	<ItemGroup>
+		<AndroidNativeLibrary Include="$(MsQuicNativeDir)\arm64-v8a\libmsquic.so">
+			<Abi>arm64-v8a</Abi>
+			<Visible>false</Visible>
+		</AndroidNativeLibrary>
+		<AndroidNativeLibrary Include="$(MsQuicNativeDir)\x86_64\libmsquic.so">
+			<Abi>x86_64</Abi>
+			<Visible>false</Visible>
+		</AndroidNativeLibrary>
+	</ItemGroup>
+
+	<!-- Convenience: when a fresh local build has produced artifacts, refresh the committed native\ copy
+	     so the package always ships the latest .so. On a clean checkout (no artifacts) the committed copy
+	     is the source of truth and is used as-is. -->
+	<Target Name="RefreshMsQuicNative" BeforeTargets="BeforeBuild"
+			Condition="Exists('$(MsQuicArtifactsDir)\arm64_Release_openssl\libmsquic.so') And Exists('$(MsQuicArtifactsDir)\x64_Release_openssl\libmsquic.so')">
+		<Copy SourceFiles="$(MsQuicArtifactsDir)\arm64_Release_openssl\libmsquic.so"
+			  DestinationFiles="$(MsQuicNativeDir)\arm64-v8a\libmsquic.so" SkipUnchangedFiles="true" />
+		<Copy SourceFiles="$(MsQuicArtifactsDir)\x64_Release_openssl\libmsquic.so"
+			  DestinationFiles="$(MsQuicNativeDir)\x86_64\libmsquic.so" SkipUnchangedFiles="true" />
+	</Target>
+
+	<Target Name="CheckMsQuicNative" BeforeTargets="BeforeBuild" AfterTargets="RefreshMsQuicNative"
+			Condition="!Exists('$(MsQuicNativeDir)\arm64-v8a\libmsquic.so')">
+		<Error Text="Committed native library not found at '$(MsQuicNativeDir)\arm64-v8a\libmsquic.so'. Build the .so with android\build-android.ps1 (it lands in android\artifacts\) — this project then copies it into native\." />
+	</Target>
+
+</Project>

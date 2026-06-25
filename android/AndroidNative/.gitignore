@@ -1,0 +1,6 @@
+# This fork repo does not globally ignore bin/ — ignore this project's build output locally.
+bin/
+obj/
+
+# Do NOT ignore native/ — the prebuilt libmsquic.so per ABI is committed on purpose.
+!native/

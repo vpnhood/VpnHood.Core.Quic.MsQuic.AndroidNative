@@ -1,0 +1,63 @@
+diff --git a/Configurations/15-android.conf b/Configurations/15-android.conf
+index 1de6b7a915..9c19abb615 100644
+--- a/Configurations/15-android.conf
++++ b/Configurations/15-android.conf
+@@ -38,6 +38,10 @@
+                 die "\$ANDROID_NDK_ROOT=$ndk is invalid";
+             }
+             $ndk = canonpath($ndk);
++            # Normalize to forward slashes on Windows so the path doesn't
++            # introduce Perl regex metacharacters (e.g. \A, \n, \D) and
++            # matches the forward-slash-delimited regexes below.
++            $ndk =~ s|\\|/|g;
+ 
+             my $ndkver = undef;
+ 
+@@ -104,7 +108,19 @@
+             my $cppflags;
+ 
+             # see if there is NDK clang on $PATH, "universal" or "standalone"
+-            if (which("clang") =~ m|^$ndk/.*/prebuilt/([^/]+)/|) {
++            # Helper: normalize path separators to forward slashes so the
++            # which() return value matches $ndk (also normalized above).
++            # On Windows, IPC::Cmd::can_run returns 8.3 short paths; convert
++            # back to long paths before comparing against $ndk.
++            my $which_f = sub {
++                my $p = which($_[0]) // "";
++                if ($^O eq 'MSWin32' && $p ne "") {
++                    eval { require Win32; $p = Win32::GetLongPathName($p) // $p };
++                }
++                $p =~ s|\\|/|g;
++                $p
++            };
++            if ($which_f->("clang") =~ m|^$ndk/.*/prebuilt/([^/]+)/|) {
+                 my $host=$1;
+                 # harmonize with gcc default
+                 my $arm = $ndkver > 16 ? "armv7a" : "armv5te";
+@@ -119,7 +135,7 @@
+                     $user{CC} = "$tridefault$api-clang";
+                 }
+                 $user{CROSS_COMPILE} = undef;
+-                if (which("llvm-ar") =~ m|^$ndk/.*/prebuilt/([^/]+)/|) {
++                if ($which_f->("llvm-ar") =~ m|^$ndk/.*/prebuilt/([^/]+)/|) {
+                     $user{AR} = "llvm-ar";
+                     $user{ARFLAGS} = [ "rs" ];
+                     $user{RANLIB} = ":";
+@@ -131,7 +147,7 @@
+                 # *after* announcement that gcc is being phased out, so
+                 # favouring clang is considered adequate. Those who insist
+                 # have option to enforce test for gcc with CC=gcc.
+-                if (which("$triarch-$cc") !~ m|^$ndk|) {
++                if ($which_f->("$triarch-$cc") !~ m|^$ndk|) {
+                     die "no NDK $triarch-$cc on \$PATH";
+                 }
+                 $user{CC} = $cc;
+@@ -139,7 +155,7 @@
+             } elsif ($user{CC} eq "clang") {
+                 die "no NDK clang on \$PATH";
+             } else {
+-                if (which("$triarch-gcc") !~ m|^$ndk/.*/prebuilt/([^/]+)/|) {
++                if ($which_f->("$triarch-gcc") !~ m|^$ndk/.*/prebuilt/([^/]+)/|) {
+                     die "no NDK $triarch-gcc on \$PATH";
+                 }
+                 $cflags .= " -mandroid";
