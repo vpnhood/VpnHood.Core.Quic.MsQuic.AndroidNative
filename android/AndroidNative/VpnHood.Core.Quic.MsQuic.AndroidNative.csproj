@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 	<!-- ================================================================================================
-	     Self-contained native QUIC package for Android: the prebuilt libmsquic.so (committed, per ABI)
+	     Self-contained native QUIC package for Android: the prebuilt libmsquic.so (built by CI, per ABI)
 	     PLUS the Microsoft.Quic C# P/Invoke bindings. It has NO VpnHood dependencies and is the ONLY
 	     place that knows about native linking. VpnHood.Core.Quic.Android references just this project
 	     (or, once published, the NuGet of the same name) and stays a clean, pure-managed project.
@@ -62,8 +62,10 @@
 	     PUBLIC types (so consumers need no InternalsVisibleTo). They are picked up by the SDK's default .cs
 	     globbing — no explicit <Compile> items needed. -->
 
-	<!-- The prebuilt native libraries are COMMITTED under native\<abi>\ (the package carries the binary).
-	     They flow transitively into any consuming APK. Only arm64-v8a + x86_64 are produced. -->
+	<!-- The native libraries are built fresh by CI (.github/workflows/android-publish.yml), copied into
+	     native\<abi>\, and packed into the NuGet. They are NOT committed — for a local pack, build them
+	     first with android\build-android.ps1. They flow transitively into any consuming APK.
+	     Only arm64-v8a + x86_64 are produced. -->
 	<ItemGroup>
 		<AndroidNativeLibrary Include="$(MsQuicNativeDir)\arm64-v8a\libmsquic.so">
 			<Abi>arm64-v8a</Abi>
@@ -75,9 +77,9 @@
 		</AndroidNativeLibrary>
 	</ItemGroup>
 
-	<!-- Convenience: when a fresh local build has produced artifacts, refresh the committed native\ copy
-	     so the package always ships the latest .so. On a clean checkout (no artifacts) the committed copy
-	     is the source of truth and is used as-is. -->
+	<!-- When a local build (android\build-android.ps1) or CI has produced artifacts, copy them into
+	     native\<abi>\ so the package ships the freshly built .so. The .so are git-ignored, so this is
+	     what populates native\ before pack. -->
 	<Target Name="RefreshMsQuicNative" BeforeTargets="BeforeBuild"
 			Condition="Exists('$(MsQuicArtifactsDir)\arm64_Release_openssl\libmsquic.so') And Exists('$(MsQuicArtifactsDir)\x64_Release_openssl\libmsquic.so')">
 		<Copy SourceFiles="$(MsQuicArtifactsDir)\arm64_Release_openssl\libmsquic.so"

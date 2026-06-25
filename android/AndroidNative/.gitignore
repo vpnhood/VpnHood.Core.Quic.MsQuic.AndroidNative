@@ -2,5 +2,7 @@
 bin/
 obj/
 
-# Do NOT ignore native/ — the prebuilt libmsquic.so per ABI is committed on purpose.
-!native/
+# The per-ABI libmsquic.so is built fresh by CI (.github/workflows/android-publish.yml) and packed
+# into the NuGet — it is NOT committed. For a LOCAL pack, build it first with android/build-android.ps1
+# (it lands in native/<abi>/ via the csproj RefreshMsQuicNative target).
+native/**/*.so
