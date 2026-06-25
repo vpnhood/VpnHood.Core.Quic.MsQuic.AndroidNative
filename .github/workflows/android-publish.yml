@@ -1,0 +1,139 @@
+# Builds libmsquic.so for Android (arm64-v8a + x86_64) on a Linux runner, packs the
+# VpnHood.Core.Quic.MsQuic.AndroidNative NuGet (native .so + Microsoft.Quic bindings)
+# and publishes it to nuget.org. Runs on every push to main; each push gets a new,
+# monotonically increasing version 8.0.<run-number>. Consumers float on 8.0.* and
+# always restore the newest published build.
+#
+# This is the ONLY workflow this fork should carry. The upstream microsoft/msquic
+# workflows were removed on purpose (they build/test upstream msquic, not this package).
+name: Build & Publish Android NuGet
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:        # allow manual runs from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-publish
+  cancel-in-progress: false # never abort an in-flight publish
+
+env:
+  ANDROID_API_LEVEL: "29"
+  PACKAGE_ID: VpnHood.Core.Quic.MsQuic.AndroidNative
+  CSPROJ: android/AndroidNative/VpnHood.Core.Quic.MsQuic.AndroidNative.csproj
+  NATIVE_DIR: android/AndroidNative/native
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Compute version
+        id: ver
+        run: echo "version=8.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          cmake --version
+          ninja --version
+
+      - name: Resolve Android NDK
+        id: ndk
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$ANDROID_NDK_ROOT}}"
+          if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
+            echo "::error::Android NDK not found on runner"; exit 1
+          fi
+          echo "Using NDK: $NDK"
+          echo "ndk=$NDK" >> "$GITHUB_OUTPUT"
+
+      - name: Build libmsquic.so (both ABIs)
+        env:
+          NDK: ${{ steps.ndk.outputs.ndk }}
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_ROOT="$NDK"
+          export ANDROID_NDK_HOME="$NDK"
+          build_abi() {
+            local ABI="$1"
+            echo "=== Configuring $ABI ==="
+            cmake -S . -B "build-$ABI" -G Ninja \
+              -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+              -DANDROID_ABI="$ABI" \
+              -DANDROID_PLATFORM="android-$ANDROID_API_LEVEL" \
+              -DANDROID_NDK="$NDK" \
+              -DQUIC_TLS_LIB=openssl \
+              -DQUIC_OUTPUT_DIR="$PWD/ci-out/$ABI" \
+              -DQUIC_ENABLE_LOGGING=off \
+              -DQUIC_BUILD_TOOLS=off \
+              -DQUIC_BUILD_TEST=off \
+              -DQUIC_BUILD_PERF=off \
+              -DQUIC_SKIP_CI_CHECKS=ON \
+              -DQUIC_LIBRARY_NAME=msquic \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo
+            echo "=== Building $ABI ==="
+            cmake --build "build-$ABI" --parallel
+            local SO="$PWD/ci-out/$ABI/libmsquic.so"
+            if [ ! -f "$SO" ]; then
+              echo "::error::libmsquic.so not produced for $ABI"; ls -R "$PWD/ci-out/$ABI" || true; exit 1
+            fi
+            mkdir -p "$NATIVE_DIR/$ABI"
+            cp "$SO" "$NATIVE_DIR/$ABI/libmsquic.so"
+            echo "Copied $ABI -> $NATIVE_DIR/$ABI/libmsquic.so ($(du -h "$SO" | cut -f1))"
+          }
+          build_abi arm64-v8a
+          build_abi x86_64
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install .NET Android workload
+        run: dotnet workload install android
+
+      - name: Pack NuGet
+        run: |
+          dotnet pack "$CSPROJ" -c Release -o ./nupkg \
+            -p:Version=${{ steps.ver.outputs.version }} \
+            -p:ContinuousIntegrationBuild=true \
+            -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg
+
+      - name: Verify package contents (both ABIs embedded)
+        run: |
+          set -euo pipefail
+          pkg=$(ls ./nupkg/${PACKAGE_ID}.*.nupkg | head -n1)
+          echo "Inspecting $pkg"
+          aar=$(unzip -Z1 "$pkg" | grep -E '\.aar$' | head -n1)
+          unzip -p "$pkg" "$aar" > /tmp/lib.aar
+          for abi in arm64-v8a x86_64; do
+            if ! unzip -Z1 /tmp/lib.aar | grep -q "jni/$abi/libmsquic.so"; then
+              echo "::error::missing jni/$abi/libmsquic.so in package"; exit 1
+            fi
+            echo "ok: jni/$abi/libmsquic.so"
+          done
+
+      - name: Push to nuget.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "${NUGET_API_KEY:-}" ]; then
+            echo "::error::NUGET_API_KEY secret is not set on the repository"; exit 1
+          fi
+          dotnet nuget push "./nupkg/${PACKAGE_ID}.${{ steps.ver.outputs.version }}.nupkg" \
+            --source "https://api.nuget.org/v3/index.json" \
+            --api-key "$NUGET_API_KEY" --skip-duplicate
+
+      - name: Summary
+        run: |
+          echo "### Published ${PACKAGE_ID} ${{ steps.ver.outputs.version }} :rocket:" >> "$GITHUB_STEP_SUMMARY"
+          echo "Consumers floating on \`8.0.*\` will pick it up after indexing." >> "$GITHUB_STEP_SUMMARY"
