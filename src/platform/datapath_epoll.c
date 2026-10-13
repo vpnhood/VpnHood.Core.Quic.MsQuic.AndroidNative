@@ -161,10 +161,15 @@ typedef struct CXPLAT_SEND_DATA {
 
 } CXPLAT_SEND_DATA;
 
+//
+// Exactly the most one packet gets: an IPv4 packet on the dual-stack socket
+// carries both PKTINFOs, IP_TOS, IP_TTL and UDP_GRO. Nothing checks
+// MSG_CTRUNC and a missing option stops the process, so a new one needs room.
+//
 typedef struct CXPLAT_RECV_MSG_CONTROL_BUFFER {
     char Data[CMSG_SPACE(sizeof(struct in6_pktinfo)) + // IPV6_PKTINFO
               CMSG_SPACE(sizeof(struct in_pktinfo)) +  // IP_PKTINFO
-              3 * CMSG_SPACE(sizeof(int))]; // TOS + IP_TTL
+              3 * CMSG_SPACE(sizeof(int))]; // IP_TOS, IP_TTL, UDP_GRO
 
 } CXPLAT_RECV_MSG_CONTROL_BUFFER;
 

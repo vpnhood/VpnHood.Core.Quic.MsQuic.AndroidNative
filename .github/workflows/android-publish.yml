@@ -1,8 +1,7 @@
 # Builds libmsquic.so for Android (arm64-v8a + armeabi-v7a + x86_64) on a Linux runner, packs the
 # VpnHood.Net.Quic.MsQuic.AndroidNative NuGet (native .so + Microsoft.Quic bindings)
 # and publishes it to nuget.org. Runs on every push to main; each push gets a new,
-# monotonically increasing version 8.0.<run-number>. Consumers float on 8.0.* and
-# always restore the newest published build.
+# monotonically increasing version 8.0.<run-number>. Consumers pin the one they tested.
 #
 # This is the ONLY workflow this fork should carry. The upstream microsoft/msquic
 # workflows were removed on purpose (they build/test upstream msquic, not this package).

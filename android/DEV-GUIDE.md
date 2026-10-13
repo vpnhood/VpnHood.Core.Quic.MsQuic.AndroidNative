@@ -205,6 +205,14 @@ API 24 working:
 
 Android 7.0's emulator runs Linux 3.10: `quic-test-android` there tests all three.
 
+Two upstream parts need no change but matter on these kernels:
+
+- `src/platform/datapath_linux.c`: the GSO probe sets `UDP_GRO` before its send. Linux before
+  5.0 refuses that option, so GSO stays off where the kernel ignores `UDP_SEGMENT` (before
+  4.18) and would send each batch as one oversized datagram. Seen on Android 8.0's 3.18.
+- `src/platform/datapath_iouring.c` has the same send and receive code, unpatched: the
+  Android build leaves io_uring off (`QUIC_LINUX_IOURING_ENABLED`).
+
 ---
 
 ## Common errors and fixes
@@ -232,6 +240,10 @@ Conflicts can only occur on the files listed in the "Key patches" section above
 `src/platform/CMakeLists.txt`, `src/platform/datapath_epoll.c`).
 The `android/` directory is never touched by upstream. After resolving any conflicts,
 verify the patch files under `submodules/patches/` still apply, then rebuild with `-Clean`.
+A merge can also break Android 7.0 without a conflict: check that `QUIC_DEFAULT_ECN_ENABLED`
+(`src/core/quicdef.h`) is still `FALSE`, since ECN puts the type of service on every send,
+and that the GSO probe still sets `UDP_GRO` before its send; then run `quic-test-android` on
+Android 7.0's emulator.
 
 ---
 
