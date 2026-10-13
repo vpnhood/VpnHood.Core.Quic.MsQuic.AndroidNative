@@ -162,7 +162,8 @@ typedef struct CXPLAT_SEND_DATA {
 } CXPLAT_SEND_DATA;
 
 typedef struct CXPLAT_RECV_MSG_CONTROL_BUFFER {
-    char Data[CMSG_SPACE(sizeof(struct in6_pktinfo)) + // IP_PKTINFO
+    char Data[CMSG_SPACE(sizeof(struct in6_pktinfo)) + // IPV6_PKTINFO
+              CMSG_SPACE(sizeof(struct in_pktinfo)) +  // IP_PKTINFO
               3 * CMSG_SPACE(sizeof(int))]; // TOS + IP_TTL
 
 } CXPLAT_RECV_MSG_CONTROL_BUFFER;
@@ -586,6 +587,29 @@ CxPlatSocketContextInitialize(
                 Binding,
                 Status,
                 "setsockopt(IPV6_RECVPKTINFO) failed");
+            goto Exit;
+        }
+
+        //
+        // The local address of IPv4 packets too: Linux before 3.14 (Android 7.0
+        // phones') gives the dual-stack socket's IPv4 packets no IPV6_PKTINFO.
+        //
+        Option = TRUE;
+        Result =
+            setsockopt(
+                SocketContext->SocketFd,
+                IPPROTO_IP,
+                IP_PKTINFO,
+                (const void*)&Option,
+                sizeof(Option));
+        if (Result == SOCKET_ERROR) {
+            Status = errno;
+            QuicTraceEvent(
+                DatapathErrorStatus,
+                "[data][%p] ERROR, %u, %s.",
+                Binding,
+                Status,
+                "setsockopt(IP_PKTINFO) failed");
             goto Exit;
         }
 
@@ -1641,7 +1665,15 @@ CxPlatSocketContextRecvComplete(
                     CXPLAT_DBG_ASSERT(FALSE);
                 }
             } else if (CMsg->cmsg_level == IPPROTO_IP) {
-                if (CMsg->cmsg_type == IP_TOS) {
+                if (CMsg->cmsg_type == IP_PKTINFO) {
+                    struct in_pktinfo* PktInfo = (struct in_pktinfo*)CMSG_DATA(CMsg);
+                    CxPlatZeroMemory(LocalAddr, sizeof(*LocalAddr));
+                    LocalAddr->Ip.sa_family = QUIC_ADDRESS_FAMILY_INET;
+                    LocalAddr->Ipv4.sin_addr = PktInfo->ipi_addr;
+                    LocalAddr->Ipv4.sin_port = SocketContext->Binding->LocalAddress.Ipv6.sin6_port;
+                    LocalAddr->Ipv6.sin6_scope_id = PktInfo->ipi_ifindex;
+                    FoundLocalAddr = TRUE;
+                } else if (CMsg->cmsg_type == IP_TOS) {
                     CXPLAT_DBG_ASSERT_CMSG(CMsg, uint8_t);
                     TOS = *(uint8_t*)CMSG_DATA(CMsg);
                     FoundTOS = TRUE;
@@ -2261,17 +2293,31 @@ CxPlatSendDataPopulateAncillaryData(
     _Inout_ struct msghdr* Mhdr
     )
 {
-    Mhdr->msg_controllen = CMSG_SPACE(sizeof(int));
-    struct cmsghdr *CMsg = CMSG_FIRSTHDR(Mhdr);
-    CMsg->cmsg_level = SendData->LocalAddress.Ip.sa_family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
-    CMsg->cmsg_type = SendData->LocalAddress.Ip.sa_family == AF_INET ? IP_TOS : IPV6_TCLASS;
-    CMsg->cmsg_len = CMSG_LEN(sizeof(int));
-    *(int*)CMSG_DATA(CMsg) = SendData->ECN | (SendData->DSCP << 2);
+    //
+    // Each option goes after the ones before it. CMSG_FIRSTHDR would return
+    // NULL while msg_controllen is still zero.
+    //
+    struct cmsghdr *CMsg = (struct cmsghdr*)Mhdr->msg_control;
+    Mhdr->msg_controllen = 0;
+
+    //
+    // The type of service only when it carries ECN or DSCP: zero is the
+    // socket's own, and Linux before 3.13 (Android 7.0 phones') rejects IP_TOS
+    // as ancillary data with EINVAL, which would fail every send.
+    //
+    const int TypeOfService = SendData->ECN | (SendData->DSCP << 2);
+    if (TypeOfService != 0) {
+        Mhdr->msg_controllen += CMSG_SPACE(sizeof(int));
+        CMsg->cmsg_level = SendData->LocalAddress.Ip.sa_family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
+        CMsg->cmsg_type = SendData->LocalAddress.Ip.sa_family == AF_INET ? IP_TOS : IPV6_TCLASS;
+        CMsg->cmsg_len = CMSG_LEN(sizeof(int));
+        *(int*)CMSG_DATA(CMsg) = TypeOfService;
+        CMsg = CXPLAT_CMSG_NXTHDR(CMsg);
+    }
 
     if (!SendData->OnConnectedSocket) {
         if (SendData->LocalAddress.Ip.sa_family == AF_INET) {
             Mhdr->msg_controllen += CMSG_SPACE(sizeof(struct in_pktinfo));
-            CMsg = CXPLAT_CMSG_NXTHDR(CMsg);
             CMsg->cmsg_level = IPPROTO_IP;
             CMsg->cmsg_type = IP_PKTINFO;
             CMsg->cmsg_len = CMSG_LEN(sizeof(struct in_pktinfo));
@@ -2281,7 +2327,6 @@ CxPlatSendDataPopulateAncillaryData(
             PktInfo->ipi_addr = SendData->LocalAddress.Ipv4.sin_addr;
         } else {
             Mhdr->msg_controllen += CMSG_SPACE(sizeof(struct in6_pktinfo));
-            CMsg = CXPLAT_CMSG_NXTHDR(CMsg);
             CMsg->cmsg_level = IPPROTO_IPV6;
             CMsg->cmsg_type = IPV6_PKTINFO;
             CMsg->cmsg_len = CMSG_LEN(sizeof(struct in6_pktinfo));
@@ -2289,12 +2334,12 @@ CxPlatSendDataPopulateAncillaryData(
             PktInfo6->ipi6_ifindex = SendData->LocalAddress.Ipv6.sin6_scope_id;
             PktInfo6->ipi6_addr = SendData->LocalAddress.Ipv6.sin6_addr;
         }
+        CMsg = CXPLAT_CMSG_NXTHDR(CMsg);
     }
 
 #ifdef UDP_SEGMENT
     if (SendData->SegmentationSupported && SendData->SegmentSize > 0 && Mhdr->msg_iov->iov_len > SendData->SegmentSize) {
         Mhdr->msg_controllen += CMSG_SPACE(sizeof(uint16_t));
-        CMsg = CXPLAT_CMSG_NXTHDR(CMsg);
         CMsg->cmsg_level = SOL_UDP;
         CMsg->cmsg_type = UDP_SEGMENT;
         CMsg->cmsg_len = CMSG_LEN(sizeof(uint16_t));

@@ -180,10 +180,30 @@ Patched to wire the OpenSSL source tree (fetched via FetchContent pointing at
 ### `android/android-gcc-wrappers/`
 
 Modern NDK (r18+) ships only API-level-suffixed clang binaries
-(`aarch64-linux-android29-clang.cmd`) but OpenSSL's Configure looks for the
+(`aarch64-linux-android24-clang.cmd`) but OpenSSL's Configure looks for the
 legacy GCC-triple names (`aarch64-linux-android-gcc`). The build script generates
 thin `.cmd` shims here that forward calls to the correct clang binary. These are
 regenerated every run and are git-ignored.
+
+### Android 7.0 (API 24, Linux before 3.14) — `src/platform/`
+
+The package's minimum is API 24, and both builds target it (`ANDROID_API_LEVEL` in CI,
+`-ApiLevel` in `build-android.ps1`). From API 28 the NDK packs relocations in Android 9's
+RELR format, which Android 7.0-8.1 cannot load: the app dies when it loads the library.
+Both builds fail on a `libmsquic.so` with RELR relocations. Three upstream changes keep
+API 24 working:
+
+- `src/platform/CMakeLists.txt`: the Android build leaves out `selfsign_openssl.c`, the
+  test certificates, which only the tools and tests use; its `glob()` came with Android 9.
+- `src/platform/datapath_epoll.c`, sends: a packet carries the type of service (`IP_TOS`,
+  `IPV6_TCLASS`) only when it has ECN or DSCP. Linux before 3.13 rejects `IP_TOS` as
+  ancillary data with `EINVAL`, which failed every send.
+- `src/platform/datapath_epoll.c`, receives: the socket also asks for `IP_PKTINFO`, and an
+  IPv4 packet's local address comes from it. Linux before 3.14 gives a dual-stack socket's
+  IPv4 packets no `IPV6_PKTINFO`, and msquic stops the process on a packet without a local
+  address (`CXPLAT_FRE_ASSERT(FoundLocalAddr)`).
+
+Android 7.0's emulator runs Linux 3.10: `quic-test-android` there tests all three.
 
 ---
 
@@ -208,7 +228,8 @@ git submodule update --init --recursive
 ```
 
 Conflicts can only occur on the files listed in the "Key patches" section above
-(`CMakeLists.txt`, `submodules/CMakeLists.txt`, `submodules/fix_openssl_makefile.cmake`).
+(`CMakeLists.txt`, `submodules/CMakeLists.txt`, `submodules/fix_openssl_makefile.cmake`,
+`src/platform/CMakeLists.txt`, `src/platform/datapath_epoll.c`).
 The `android/` directory is never touched by upstream. After resolving any conflicts,
 verify the patch files under `submodules/patches/` still apply, then rebuild with `-Clean`.
 
