@@ -22,7 +22,9 @@ concurrency:
   cancel-in-progress: false # never abort an in-flight publish
 
 env:
-  ANDROID_API_LEVEL: "29"
+  # The package's minimum (its SupportedOSPlatformVersion). From 28 the NDK packs relocations in
+  # Android 9's RELR format, which Android 7.0-8.1 cannot load: the app would die at load.
+  ANDROID_API_LEVEL: "24"
   PACKAGE_ID: VpnHood.Net.Quic.MsQuic.AndroidNative
   CSPROJ: android/VpnHood.Net.Quic.MsQuic.AndroidNative/VpnHood.Net.Quic.MsQuic.AndroidNative.csproj
   NATIVE_DIR: android/VpnHood.Net.Quic.MsQuic.AndroidNative/native
@@ -67,7 +69,7 @@ jobs:
 
           # OpenSSL's Configure (15-android.conf) looks for the legacy GCC-triple
           # compilers (aarch64-linux-android-gcc) but modern NDK ships only
-          # API-suffixed clang (aarch64-linux-android29-clang) + llvm-* tools.
+          # API-suffixed clang (aarch64-linux-android24-clang) + llvm-* tools.
           # Generate thin wrapper scripts that forward to the real binaries and
           # put them (plus the NDK llvm bin) on PATH. Mirrors android/build-android.ps1.
           NDK_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -115,6 +117,12 @@ jobs:
             local SO="$PWD/ci-out/$ABI/libmsquic.so"
             if [ ! -f "$SO" ]; then
               echo "::error::libmsquic.so not produced for $ABI"; ls -R "$PWD/ci-out/$ABI" || true; exit 1
+            fi
+            # Android 7.0-8.1 cannot load Android 9's packed relocations (RELR)
+            local dynamic
+            dynamic=$("$NDK_BIN/llvm-readelf" -d "$SO")
+            if grep -q RELR <<<"$dynamic"; then
+              echo "::error::$ABI libmsquic.so has RELR relocations, which Android before 9 cannot load"; exit 1
             fi
             mkdir -p "$NATIVE_DIR/$ABI"
             cp "$SO" "$NATIVE_DIR/$ABI/libmsquic.so"

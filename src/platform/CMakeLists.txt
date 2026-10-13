@@ -57,7 +57,12 @@ elseif(QUIC_TLS_LIB STREQUAL "quictls" OR QUIC_TLS_LIB STREQUAL "openssl")
     if ("${CX_PLATFORM}" STREQUAL "windows")
         set(SOURCES ${SOURCES} certificates_capi.c cert_capi.c  selfsign_capi.c)
     elseif(CX_PLATFORM STREQUAL "linux")
-        set(SOURCES ${SOURCES} certificates_posix.c selfsign_openssl.c)
+        set(SOURCES ${SOURCES} certificates_posix.c)
+        # The test certificates, for the tools and tests only: the Android build makes neither, and
+        # their glob() came with Android 9, above the Android package's minimum
+        if (NOT ANDROID)
+            set(SOURCES ${SOURCES} selfsign_openssl.c)
+        endif()
     else()
         set(SOURCES ${SOURCES} certificates_darwin.c selfsign_openssl.c)
     endif()

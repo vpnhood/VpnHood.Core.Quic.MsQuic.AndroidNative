@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Locates the Android NDK, then runs CMake to cross-compile msquic for
-    Android API 29+ using OpenSSL as the TLS backend.
+    Android API 24+ (the package's minimum) using OpenSSL as the TLS backend.
 
 .PARAMETER Config
     Build configuration: Debug or Release (default: Release)
@@ -14,7 +14,8 @@
     Target architecture: x64, arm64, arm, or all (default: all)
 
 .PARAMETER ApiLevel
-    Android API level (default: 29)
+    Android API level (default: 24, the package's minimum). From 28 the NDK packs relocations in
+    Android 9's RELR format, which Android 7.0-8.1 cannot load.
 
 .PARAMETER NdkPath
     Explicit path to the Android NDK root. If omitted the script searches
@@ -38,7 +39,7 @@ param (
     [string]$Arch = "all",
 
     [Parameter(Mandatory = $false)]
-    [int]$ApiLevel = 29,
+    [int]$ApiLevel = 24,
 
     [Parameter(Mandatory = $false)]
     [string]$NdkPath = "",
@@ -267,6 +268,11 @@ function Build-Android {
     } finally {
         Pop-Location
     }
+
+    # Android 7.0-8.1 cannot load Android 9's packed relocations (RELR)
+    $dynamic = & (Join-Path $clangBin "llvm-readelf.exe") -d (Join-Path $artifactsDir "libmsquic.so")
+    if ($LASTEXITCODE -ne 0) { throw "llvm-readelf failed for $androidAbi" }
+    if ($dynamic -match 'RELR') { throw "libmsquic.so for $androidAbi has RELR relocations, which Android before 9 cannot load" }
 
     Write-Host ""
     Write-Host "=== Artifacts for $androidAbi ==="
